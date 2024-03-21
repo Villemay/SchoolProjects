@@ -1,0 +1,191 @@
+#include <project.h>
+#include <stdio.h>
+#include "FreeRTOS.h"
+#include "task.h"
+#include "Motor.h"
+#include "Ultra.h"
+#include "Nunchuk.h"
+#include "Reflectance.h"
+#include "Gyro.h"
+#include "Accel_magnet.h"
+#include "LSM303D.h"
+#include "IR.h"
+#include "Beep.h"
+#include "mqtt_sender.h"
+#include <time.h>
+#include <sys/time.h>
+#include "serial1.h"
+#include <unistd.h>
+#include <stdlib.h>
+#include <time.h>
+
+
+
+#if 1
+void Viiva (void);
+void Ympyra (void);
+struct sensors_ sen;
+void oikea();
+void vasen();
+void Keha_sisa();
+void zmain(void)
+{
+    //alustetaan muutujia ja käynnistetään antureita
+    TickType_t alku_aika, loppu_aika, koko_aika, este_aika;
+    reflectance_start();
+    motor_start();
+    IR_Start();
+    reflectance_set_threshold(9000, 9000, 11000, 11000, 9000, 9000);
+    for(;;)
+    {
+        reflectance_digital(&sen);      
+        vTaskDelay(0);
+       if (SW1_Read()== 0)//SW1 kertoo onko nappia painettu
+       {
+            //ajaa viivalle
+            Viiva();
+            print_mqtt("Zumo02/ready","zumo");  
+            IR_wait();
+            alku_aika = xTaskGetTickCount( );
+            print_mqtt("Zumo02/start","%d",alku_aika);
+            //ajaa kehän sisälle
+            Keha_sisa();
+            //kiertää ympyrässä
+            Ympyra ();
+            motor_forward(0,0);
+            loppu_aika = xTaskGetTickCount( );
+            print_mqtt("Zumo02/stop","%d",loppu_aika);
+            koko_aika = loppu_aika - alku_aika;
+            print_mqtt("Zumo02/time","%d",koko_aika);
+            //lopettaa koko scriptin
+            motor_stop();
+            break;
+        }
+       else
+        motor_forward(0,0);
+    }
+}
+//pysähtyy viivalle
+void Viiva (void)
+{
+    motor_start();
+    motor_forward(0,0);   
+    while (1)
+    {
+        reflectance_digital(&sen);
+        //tarkistaa ollaanko viivalla vai pitääkö mennä eteenpäin
+        while ((sen.l3 == 0) && (sen.r3 == 0))
+        {
+            motor_forward(20,0);
+            reflectance_digital(&sen);
+        }
+       //tarkistaa ollaanko viivalla jos ollaan pysähtyy
+       if ((sen.l3 == 1) && (sen.r3 == 1)){
+            motor_forward(0,0);
+            reflectance_digital(&sen);
+            break;
+        }
+    }
+}
+//pysähtyy ympyrän mustalla viivalla
+void Ympyra (void)
+{
+    TickType_t este_aika;
+    motor_start();
+    motor_forward(0,0);
+    while(1){
+        reflectance_digital(&sen);
+        int n = rand() %2;//Käännös on satunnainen
+        //käynnistetään etäisyys anturit ja määtitellään ne
+        Ultra_Start();
+        int d = Ultra_GetDistance();
+        d =Ultra_GetDistance();
+        //tarkastetaan onko robotin vasen tai oikea puoli viivan päällä
+        if ((sen.l1 == 1) || (sen.r1 == 1))
+        {
+            motor_forward(0,0);
+            motor_backward(200,200);
+            //jos user nappia painetaan ohjelma loppuu
+            if (SW1_Read()== 0)
+            {
+            motor_forward(0,0);
+            break;
+            }
+            //tarkastettaan satunnaisluvusta onko vasen vai oikea
+            else if (n == 0)
+            {
+            vasen(100,100,400);
+            }
+            //tarkastettaan satunnaisluvusta onko vasen vai oikea
+            else if (n==1)
+            {
+            oikea(100,100,400);
+            }
+            //katsotaan onko este lähellä
+            else if(d<1){
+                //käännytään satunnaisteti vasempaan tai oikeaan
+                if(n==0){
+                    vasen(100,100,400);
+                    este_aika=xTaskGetTickCount();
+                    print_mqtt("Zumo02/obstacle","%d",este_aika);
+                }else if(n==1){
+                    oikea(100,100,400);
+                    este_aika=xTaskGetTickCount();
+                    print_mqtt("Zumo02/obstacle","%d",este_aika);
+                }
+            }
+              
+        }
+        //tarkastetaan onko robotti tyhjällä alueella
+        else if ((sen.l1 == 0) && (sen.r1 == 0))
+        {   
+            motor_forward(40,0);
+            //alustetaan etäisyys mittari ja käynnistetään se
+            Ultra_Start();
+            int d = Ultra_GetDistance();
+            d =Ultra_GetDistance();
+            //jos user nappia painetaan ohjelma pysähtyy
+            if (SW1_Read()== 0)
+            {
+                motor_forward(0,0);
+                break;
+            }
+            //tarkastetaan onko este lähellä
+            else if(d<1){
+                //jos on käännytään vasempaan
+                vasen(100,100,400);
+                este_aika=xTaskGetTickCount();
+                print_mqtt("Zumo02/obstacle","%d",este_aika);
+            }
+        }
+    }
+}
+//Pysähtyy kehän sisälle
+void Keha_sisa(void)
+{
+while(1)
+{
+reflectance_digital(&sen);
+    if ((sen.l1 == 0) && (sen.r1 == 0))
+    {
+        motor_forward(100,100);
+        motor_forward(0,0);
+        break;
+    }
+    else
+    {
+        motor_forward(200,0);
+        vTaskDelay(8);
+    }
+}
+//kääntyy oikealle
+}void oikea()
+{
+    SetMotors(1,0,50,50,500);
+}
+//kääntyy vasemmalle
+void vasen()
+{
+    SetMotors(0,1,50,50,500);
+}
+#endif
